@@ -6,11 +6,15 @@ import { getDemoFromFilePath } from 'csdm/node/demo/get-demo-from-file-path';
 import { getOutputFolderPath } from 'csdm/node/video/get-output-folder-path';
 import { generateVideo } from 'csdm/node/video/generation/generate-video';
 import type { Sequence } from 'csdm/common/types/sequence';
-import yargsParser from 'yargs-parser';
 import type { EncoderSoftware } from 'csdm/common/types/encoder-software';
+import { EncoderSoftware as EncoderSoftwareEnum } from 'csdm/common/types/encoder-software';
 import type { RecordingSystem } from 'csdm/common/types/recording-system';
+import { RecordingSystem as RecordingSystemEnum } from 'csdm/common/types/recording-system';
 import type { RecordingOutput } from 'csdm/common/types/recording-output';
+import { RecordingOutput as RecordingOutputEnum } from 'csdm/common/types/recording-output';
 import type { VideoContainer } from 'csdm/common/types/video-container';
+import { parseArgs } from 'node:util';
+import { InvalidArgument } from 'csdm/node/errors/invalid-argument';
 
 export class VideoCommand extends Command {
   public static Name = 'video';
@@ -73,31 +77,31 @@ export class VideoCommand extends Command {
   }
 
   public async run() {
-    this.parseArgs();
-    await migrateSettings();
-    await this.initDatabaseConnection();
-
-    const settings = await getSettings();
-    const demo = await getDemoFromFilePath(this.demoPath);
-    const outputFolderPath = await getOutputFolderPath(settings.video, this.demoPath);
-
-    const sequence: Sequence = {
-      number: 1,
-      startTick: this.startTick,
-      endTick: this.endTick,
-      showXRay: this.showXRay ?? settings.video.showXRay,
-      showOnlyDeathNotices: this.showOnlyDeathNotices ?? settings.video.showOnlyDeathNotices,
-      playersOptions: [],
-      cameras: [],
-      playerVoicesEnabled: this.playerVoices ?? settings.video.playerVoicesEnabled,
-      deathNoticesDuration: this.deathNoticesDuration ?? settings.video.deathNoticesDuration,
-      cfg: this.cfg,
-    };
-
-    const videoId = randomUUID();
-    const controller = new AbortController();
-
     try {
+      this.parseArgs();
+      await migrateSettings();
+      await this.initDatabaseConnection();
+
+      const settings = await getSettings();
+      const demo = await getDemoFromFilePath(this.demoPath);
+      const outputFolderPath = await getOutputFolderPath(settings.video, this.demoPath);
+
+      const sequence: Sequence = {
+        number: 1,
+        startTick: this.startTick,
+        endTick: this.endTick,
+        showXRay: this.showXRay ?? settings.video.showXRay,
+        showOnlyDeathNotices: this.showOnlyDeathNotices ?? settings.video.showOnlyDeathNotices,
+        playersOptions: [],
+        cameras: [],
+        playerVoicesEnabled: this.playerVoices ?? settings.video.playerVoicesEnabled,
+        deathNoticesDuration: this.deathNoticesDuration ?? settings.video.deathNoticesDuration,
+        cfg: this.cfg,
+      };
+
+      const videoId = randomUUID();
+      const controller = new AbortController();
+
       await generateVideo({
         videoId,
         checksum: demo.checksum,
@@ -143,6 +147,9 @@ export class VideoCommand extends Command {
     } catch (error) {
       if (error instanceof Error) {
         console.error(error.message);
+        if (error instanceof InvalidArgument) {
+          this.printHelp();
+        }
       } else {
         console.error(error);
       }
@@ -152,45 +159,153 @@ export class VideoCommand extends Command {
 
   protected parseArgs() {
     super.parseArgs(this.args);
-    const parsedArgs = yargsParser(this.args);
+    const { values, positionals } = parseArgs({
+      options: {
+        framerate: { type: 'string' },
+        width: { type: 'string' },
+        height: { type: 'string' },
+        'close-game-after-recording': { type: 'boolean' },
+        'concatenate-sequences': { type: 'boolean' },
+        'encoder-software': { type: 'string' },
+        'recording-system': { type: 'string' },
+        'recording-output': { type: 'string' },
+        'ffmpeg-crf': { type: 'string' },
+        'ffmpeg-audio-bitrate': { type: 'string' },
+        'ffmpeg-video-codec': { type: 'string' },
+        'ffmpeg-audio-codec': { type: 'string' },
+        'ffmpeg-video-container': { type: 'string' },
+        'ffmpeg-input-parameters': { type: 'string' },
+        'ffmpeg-output-parameters': { type: 'string' },
+        'show-x-ray': { type: 'boolean' },
+        'show-only-death-notices': { type: 'boolean' },
+        'player-voices': { type: 'boolean' },
+        'death-notices-duration': { type: 'string' },
+        cfg: { type: 'string' },
+      },
+      allowPositionals: true,
+      args: this.args,
+    });
 
-    if (parsedArgs._.length < 3) {
-      console.log('Missing arguments');
-      this.printHelp();
-      this.exitWithFailure();
+    if (positionals.length < 3) {
+      throw new InvalidArgument('Missing arguments');
     }
 
-    this.demoPath = String(parsedArgs._[0]);
-    this.startTick = Number(parsedArgs._[1]);
-    this.endTick = Number(parsedArgs._[2]);
-
-    const isValidTicks = !Number.isNaN(this.startTick) && !Number.isNaN(this.endTick) && this.endTick > this.startTick;
-    const isDemo = this.demoPath.endsWith('.dem');
-
-    if (!isDemo || !isValidTicks) {
-      console.log('Invalid arguments');
-      this.exitWithFailure();
+    const demoPath = positionals[0];
+    if (typeof demoPath !== 'string' || !demoPath.endsWith('.dem')) {
+      throw new InvalidArgument('Invalid demo path');
     }
+    this.demoPath = demoPath;
 
-    this.framerate = parsedArgs.framerate;
-    this.width = parsedArgs.width;
-    this.height = parsedArgs.height;
-    this.closeGameAfterRecording = parsedArgs.closeGameAfterRecording;
-    this.concatenateSequences = parsedArgs.concatenateSequences;
-    this.encoderSoftware = parsedArgs.encoderSoftware;
-    this.recordingSystem = parsedArgs.recordingSystem;
-    this.recordingOutput = parsedArgs.recordingOutput;
-    this.ffmpegCrf = parsedArgs.ffmpegCrf;
-    this.ffmpegAudioBitrate = parsedArgs.ffmpegAudioBitrate;
-    this.ffmpegVideoCodec = parsedArgs.ffmpegVideoCodec;
-    this.ffmpegAudioCodec = parsedArgs.ffmpegAudioCodec;
-    this.ffmpegVideoContainer = parsedArgs.ffmpegVideoContainer;
-    this.ffmpegInputParameters = parsedArgs.ffmpegInputParameters;
-    this.ffmpegOutputParameters = parsedArgs.ffmpegOutputParameters;
-    this.showXRay = parsedArgs.showXRay;
-    this.showOnlyDeathNotices = parsedArgs.showOnlyDeathNotices;
-    this.playerVoices = parsedArgs.playerVoices;
-    this.deathNoticesDuration = parsedArgs.deathNoticesDuration;
-    this.cfg = parsedArgs.cfg;
+    const startTick = Number(positionals[1]);
+    if (Number.isNaN(startTick)) {
+      throw new InvalidArgument('Start tick is not a number');
+    }
+    this.startTick = startTick;
+
+    const endTick = Number(positionals[2]);
+    if (Number.isNaN(endTick)) {
+      throw new InvalidArgument('End tick is not a number');
+    }
+    if (endTick <= startTick) {
+      throw new InvalidArgument('End tick must be greater than start tick');
+    }
+    this.endTick = endTick;
+
+    if (values.framerate !== undefined) {
+      const framerate = Number(values.framerate);
+      if (Number.isNaN(framerate)) {
+        throw new InvalidArgument('Framerate is not a number');
+      }
+      this.framerate = framerate;
+    }
+    if (values.width !== undefined) {
+      const width = Number(values.width);
+      if (Number.isNaN(width)) {
+        throw new InvalidArgument('Width is not a number');
+      }
+      this.width = width;
+    }
+    if (values.height !== undefined) {
+      const height = Number(values.height);
+      if (Number.isNaN(height)) {
+        throw new InvalidArgument('Height is not a number');
+      }
+      this.height = height;
+    }
+    if (values['close-game-after-recording'] !== undefined) {
+      this.closeGameAfterRecording = Boolean(values['close-game-after-recording']);
+    }
+    if (values['concatenate-sequences'] !== undefined) {
+      this.concatenateSequences = Boolean(values['concatenate-sequences']);
+    }
+    if (values['encoder-software'] !== undefined) {
+      const encoderSoftware = values['encoder-software'] as EncoderSoftware;
+      if (!Object.values(EncoderSoftwareEnum).includes(encoderSoftware)) {
+        throw new InvalidArgument('Invalid encoder software');
+      }
+      this.encoderSoftware = encoderSoftware;
+    }
+    if (values['recording-system'] !== undefined) {
+      const recordingSystem = values['recording-system'] as RecordingSystem;
+      if (!Object.values(RecordingSystemEnum).includes(recordingSystem)) {
+        throw new InvalidArgument('Invalid recording system');
+      }
+      this.recordingSystem = recordingSystem;
+    }
+    if (values['recording-output'] !== undefined) {
+      const recordingOutput = values['recording-output'] as RecordingOutput;
+      if (!Object.values(RecordingOutputEnum).includes(recordingOutput)) {
+        throw new InvalidArgument('Invalid recording output');
+      }
+      this.recordingOutput = recordingOutput;
+    }
+    if (values['ffmpeg-crf'] !== undefined) {
+      const ffmpegCrf = Number(values['ffmpeg-crf']);
+      if (Number.isNaN(ffmpegCrf)) {
+        throw new InvalidArgument('FFMPEG CRF is not a number');
+      }
+      this.ffmpegCrf = ffmpegCrf;
+    }
+    if (values['ffmpeg-audio-bitrate'] !== undefined) {
+      const ffmpegAudioBitrate = Number(values['ffmpeg-audio-bitrate']);
+      if (Number.isNaN(ffmpegAudioBitrate)) {
+        throw new InvalidArgument('FFMPEG audio bitrate is not a number');
+      }
+      this.ffmpegAudioBitrate = ffmpegAudioBitrate;
+    }
+    if (values['ffmpeg-video-codec'] !== undefined) {
+      this.ffmpegVideoCodec = String(values['ffmpeg-video-codec']);
+    }
+    if (values['ffmpeg-audio-codec'] !== undefined) {
+      this.ffmpegAudioCodec = String(values['ffmpeg-audio-codec']);
+    }
+    if (values['ffmpeg-video-container'] !== undefined) {
+      this.ffmpegVideoContainer = String(values['ffmpeg-video-container']);
+    }
+    if (values['ffmpeg-input-parameters'] !== undefined) {
+      this.ffmpegInputParameters = String(values['ffmpeg-input-parameters']);
+    }
+    if (values['ffmpeg-output-parameters'] !== undefined) {
+      this.ffmpegOutputParameters = String(values['ffmpeg-output-parameters']);
+    }
+    if (values['show-x-ray'] !== undefined) {
+      this.showXRay = Boolean(values['show-x-ray']);
+    }
+    if (values['show-only-death-notices'] !== undefined) {
+      this.showOnlyDeathNotices = Boolean(values['show-only-death-notices']);
+    }
+    if (values['player-voices'] !== undefined) {
+      this.playerVoices = Boolean(values['player-voices']);
+    }
+    if (values['death-notices-duration'] !== undefined) {
+      const deathNoticesDuration = Number(values['death-notices-duration']);
+      if (Number.isNaN(deathNoticesDuration)) {
+        throw new InvalidArgument('Death notices duration is not a number');
+      }
+      this.deathNoticesDuration = deathNoticesDuration;
+    }
+    if (values.cfg !== undefined) {
+      this.cfg = String(values.cfg);
+    }
   }
 }
